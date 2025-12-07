@@ -1,6 +1,30 @@
 import { supabase } from "../integrations/supabase/client";
 import { ALL_TABLES } from "../constants";
 
+// --- Helper: Robust User Lookup ---
+const findUser = async (identifier: string) => {
+  if (!identifier) return null;
+  const term = identifier.trim();
+
+  // 1. Try exact ID (UUIDs are usually 36 chars)
+  if (term.length > 20) {
+      const { data: byId } = await supabase.from('profiles').select('*').eq('id', term).maybeSingle();
+      if (byId) return byId;
+  }
+
+  // 2. Try Email (case-insensitive)
+  const { data: byEmail } = await supabase.from('profiles').select('*').ilike('email_1', term).maybeSingle();
+  if (byEmail) return byEmail;
+
+  // 3. Try Name (fuzzy match) - only if not an email format
+  if (!term.includes('@')) {
+      const { data: byName } = await supabase.from('profiles').select('*').ilike('name_1', `%${term}%`).limit(1).maybeSingle();
+      if (byName) return byName;
+  }
+
+  return null;
+};
+
 // --- Tool Implementations ---
 
 const toolsFuncs = {
@@ -16,22 +40,18 @@ const toolsFuncs = {
   },
 
   search_database: async ({ table_name, column, value }: any) => {
-    const { data, error } = await supabase.from(table_name).select('*').eq(column, value).limit(20);
+    const { data, error } = await supabase.from(table_name).select('*').ilike(column, `%${value}%`).limit(20);
     if (error) return { error: error.message };
     return { 
       result: `Found ${data?.length} matches in ${table_name}`,
       cardType: 'table_view',
-      cardData: { title: `Search: ${table_name}`, subtitle: `${column} = ${value}`, data }
+      cardData: { title: `Search: ${table_name}`, subtitle: `${column} ≈ ${value}`, data }
     };
   },
 
   get_user_details: async ({ identifier }: any) => {
-    let { data: profile } = await supabase.from('profiles').select('*').eq('email_1', identifier).single();
-    if (!profile) {
-       const { data: p2 } = await supabase.from('profiles').select('*').eq('id', identifier).single();
-       profile = p2;
-    }
-    if (!profile) return { error: "User not found" };
+    const profile = await findUser(identifier);
+    if (!profile) return { error: `User '${identifier}' not found. Please provide a valid email, ID, or name.` };
 
     const { data: wallet } = await supabase.from('wallets').select('*').eq('user_id', profile.id).single();
     
@@ -61,8 +81,8 @@ const toolsFuncs = {
   },
 
   suspend_user: async ({ email, reason }: any) => {
-    const { data: user } = await supabase.from('profiles').select('id').eq('email_1', email).single();
-    if (!user) return { error: "User not found" };
+    const user = await findUser(email);
+    if (!user) return { error: `User '${email}' not found. Cannot suspend.` };
 
     const { error } = await supabase.from('profiles').update({ 
         is_suspended: true, 
@@ -71,12 +91,12 @@ const toolsFuncs = {
     }).eq('id', user.id);
 
     if (error) return { error: error.message };
-    return { result: `User ${email} has been SUSPENDED. Reason: ${reason}` };
+    return { result: `User ${user.email_1} (${user.name_1}) has been SUSPENDED. Reason: ${reason}` };
   },
 
   activate_user: async ({ email }: any) => {
-    const { data: user } = await supabase.from('profiles').select('id').eq('email_1', email).single();
-    if (!user) return { error: "User not found" };
+    const user = await findUser(email);
+    if (!user) return { error: `User '${email}' not found. Cannot activate.` };
 
     const { error } = await supabase.from('profiles').update({ 
         is_suspended: false, 
@@ -85,39 +105,50 @@ const toolsFuncs = {
     }).eq('id', user.id);
 
     if (error) return { error: error.message };
-    return { result: `User ${email} has been REACTIVATED.` };
+    return { result: `User ${user.email_1} (${user.name_1}) has been REACTIVATED.` };
   },
 
   create_support_ticket: async ({ user_email, issue_description, priority = "normal" }: any) => {
+    // Try to link to a real user if possible
+    const user = await findUser(user_email);
+    const userId = user ? user.id : null;
+    const emailToUse = user ? user.email_1 : user_email;
+
     const { data, error } = await supabase.from('help_requests').insert({
-      email: user_email,
+      user_id: userId,
+      email: emailToUse,
       message: issue_description,
       status: 'pending',
       admin_response: `Nova Auto-Ticket: ${priority}`
     }).select();
     
     if (error) return { error: `Failed to create ticket: ${error.message}` };
-    return { result: `Support ticket created successfully for ${user_email}. Admin has been notified.` };
+    return { result: `Support ticket created successfully for ${emailToUse}. Ticket ID: ${data[0]?.id}` };
   },
 
   admin_adjust_balance: async ({ user_email, amount, balance_type = 'main_balance' }: any) => {
-    const { data: user } = await supabase.from('profiles').select('id').eq('email_1', user_email).single();
-    if (!user) return { error: "User not found" };
+    const user = await findUser(user_email);
+    if (!user) return { error: `User '${user_email}' not found. Cannot adjust balance.` };
     
     const { data: wallet } = await supabase.from('wallets').select('*').eq('user_id', user.id).single();
-    if (!wallet) return { error: "Wallet not found" };
+    if (!wallet) return { error: "User has no wallet record." };
 
     const current = wallet[balance_type] || 0;
+    const numericAmount = Number(amount);
+    
+    if (isNaN(numericAmount)) return { error: "Invalid amount provided." };
+
     const updates: any = {};
-    updates[balance_type] = current + Number(amount);
-    // Also update total balance if modifying sub-balances
+    updates[balance_type] = current + numericAmount;
+    
+    // Also update total balance if modifying sub-balances, assuming 'balance' is the aggregate
     if (balance_type !== 'balance') {
-       updates.balance = (wallet.balance || 0) + Number(amount);
+       updates.balance = (wallet.balance || 0) + numericAmount;
     }
 
     const { error } = await supabase.from('wallets').update(updates).eq('user_id', user.id);
     if (error) return { error: error.message };
-    return { result: `Balance adjusted by ${amount}. New ${balance_type}: ${updates[balance_type]}` };
+    return { result: `Balance adjusted by ${numericAmount} for ${user.email_1}. New ${balance_type}: ${updates[balance_type].toFixed(2)}` };
   },
 
   manage_system_config: async ({ action, key, value }: any) => {
@@ -136,7 +167,7 @@ const toolsFuncs = {
        try {
           if (value === 'true') parsedValue = true;
           else if (value === 'false') parsedValue = false;
-          else if (!isNaN(Number(value)) && value.trim() !== '') parsedValue = Number(value);
+          else if (!isNaN(Number(value)) && String(value).trim() !== '') parsedValue = Number(value);
           else if (typeof value === 'string' && (value.startsWith('{') || value.startsWith('['))) {
              parsedValue = JSON.parse(value);
           }
@@ -146,7 +177,7 @@ const toolsFuncs = {
        }
 
        updates[key] = parsedValue;
-       const { error } = await supabase.from('system_config').update(updates).neq('id', '0000'); // update all
+       const { error } = await supabase.from('system_config').update(updates).neq('id', '0000'); // update all rows (usually just one)
        if (error) return { error: error.message };
        return { result: `System config '${key}' set to ${value}` };
     }
@@ -192,10 +223,10 @@ export const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "get_user_details",
-      description: "Get full user profile and wallet information.",
+      description: "Get full user profile and wallet information by Name, Email or ID.",
       parameters: {
         type: "object",
-        properties: { identifier: { type: "string", description: "Email or User ID" } },
+        properties: { identifier: { type: "string", description: "Email, User ID, or Name" } },
         required: ["identifier"]
       }
     }
@@ -225,7 +256,7 @@ export const TOOL_DEFINITIONS = [
       parameters: {
         type: "object",
         properties: {
-          email: { type: "string" },
+          email: { type: "string", description: "User Email, ID or Name" },
           reason: { type: "string" }
         },
         required: ["email", "reason"]
@@ -240,7 +271,7 @@ export const TOOL_DEFINITIONS = [
       parameters: {
         type: "object",
         properties: {
-          email: { type: "string" }
+          email: { type: "string", description: "User Email, ID or Name" }
         },
         required: ["email"]
       }
@@ -285,7 +316,7 @@ export const TOOL_DEFINITIONS = [
       parameters: {
         type: "object",
         properties: {
-          user_email: { type: "string" },
+          user_email: { type: "string", description: "User Email, ID or Name" },
           amount: { type: "number", description: "Positive to add, negative to deduct" },
           balance_type: { type: "string", description: "main_balance, deposit_balance, etc." }
         },

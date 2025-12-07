@@ -23,6 +23,9 @@ export const ChatInterface = ({ currentUser }: { currentUser: any }) => {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Persistent conversation history to track context (Reasoning, Tools) accurately
+  const conversationRef = useRef<ChatMessage[]>([]);
+
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -43,15 +46,7 @@ export const ChatInterface = ({ currentUser }: { currentUser: any }) => {
     setMessages(prev => [...prev, { id: userMsgId, role: "user", text, image: displayImage }]);
 
     try {
-      // 2. Prepare History for Service
-      const historyMessages: ChatMessage[] = messages
-        .filter(m => !m.isCard && !m.isError)
-        .map(m => ({
-          role: m.role === 'model' ? 'assistant' : 'user',
-          content: m.text
-        }));
-
-      // Add current message
+      // 2. Prepare Message for AI Context
       const newMessageContent: any = imageBase64 
         ? [
             { type: "text", text },
@@ -59,22 +54,22 @@ export const ChatInterface = ({ currentUser }: { currentUser: any }) => {
           ]
         : text;
 
-      let conversation: ChatMessage[] = [
-        ...historyMessages,
-        { role: "user", content: newMessageContent }
-      ];
+      // Append to the persistent conversation brain
+      conversationRef.current.push({ role: "user", content: newMessageContent });
 
       // 3. Execution Loop (Model -> Tool -> Model)
       let turns = 0;
-      const MAX_TURNS = 5;
+      const MAX_TURNS = 10; // Increased to allow complex tool chains
       let finished = false;
 
       while (!finished && turns < MAX_TURNS) {
         turns++;
         
-        // Call Nova Service
-        const message = await sendNovaChatRequest(conversation);
-        conversation.push(message);
+        // Call Nova Service with full history
+        const message = await sendNovaChatRequest(conversationRef.current);
+        
+        // Append Model Response to History (Preserves reasoning_details and tool_calls)
+        conversationRef.current.push(message);
 
         // Check for Tool Calls
         if (message.tool_calls && message.tool_calls.length > 0) {
@@ -109,7 +104,7 @@ export const ChatInterface = ({ currentUser }: { currentUser: any }) => {
                 }
 
                 // Append result to conversation history for the model
-                conversation.push({
+                conversationRef.current.push({
                     role: "tool",
                     tool_call_id: toolCall.id,
                     content: JSON.stringify(result)
@@ -168,11 +163,11 @@ export const ChatInterface = ({ currentUser }: { currentUser: any }) => {
               </div>
            </div>
            <div>
-              <h2 className="font-bold text-slate-800 text-lg leading-tight">Nova 2 Lite</h2>
+              <h2 className="font-bold text-slate-800 text-lg leading-tight">NaxAi Pro</h2>
               <div className="flex items-center gap-1.5">
                  <span className={`w-2 h-2 rounded-full ${isLoading ? 'bg-amber-500' : 'bg-green-500'} animate-pulse`}></span>
                  <span className="text-[10px] text-slate-500 font-medium uppercase tracking-wide">
-                    {isLoading ? 'Processing...' : 'Online'}
+                    {isLoading ? 'Reasoning...' : 'Online'}
                  </span>
               </div>
            </div>
@@ -187,13 +182,13 @@ export const ChatInterface = ({ currentUser }: { currentUser: any }) => {
                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-12 h-12 text-white"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" /></svg>
               </div>
               <div className="animate-slide-up" style={{animationDelay: '0.1s'}}>
-                <h3 className="text-xl font-bold text-slate-700 mb-2">Nova 2 Lite</h3>
+                <h3 className="text-xl font-bold text-slate-700 mb-2">NaxAi Pro</h3>
                 <p className="text-slate-500 font-medium text-sm leading-relaxed max-w-xs mx-auto">
-                   Powered by Amazon Nova. Your Database Admin & Assistant. I can manage users, adjust balances, configure rewards, and solve system issues automatically.
+                   Powered by Amazon Nova. Your Personal User Assistant. I can help manage accounts, verify details, and resolve system inquiries automatically.
                 </p>
                 <div className="mt-6 flex flex-wrap justify-center gap-2">
-                   <span className="px-3 py-1 bg-white rounded-full text-[10px] font-bold text-indigo-500 shadow-sm border border-indigo-100">User Control</span>
-                   <span className="px-3 py-1 bg-white rounded-full text-[10px] font-bold text-indigo-500 shadow-sm border border-indigo-100">Financial Admin</span>
+                   <span className="px-3 py-1 bg-white rounded-full text-[10px] font-bold text-indigo-500 shadow-sm border border-indigo-100">User Support</span>
+                   <span className="px-3 py-1 bg-white rounded-full text-[10px] font-bold text-indigo-500 shadow-sm border border-indigo-100">Account Help</span>
                    <span className="px-3 py-1 bg-white rounded-full text-[10px] font-bold text-indigo-500 shadow-sm border border-indigo-100">Auto-Fix</span>
                 </div>
               </div>

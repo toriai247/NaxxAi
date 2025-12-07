@@ -2,20 +2,23 @@ import React, { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { supabase } from "./integrations/supabase/client";
 
-// Import components and pages
+// Import components
 import { ChatInterface } from "./components/ChatInterface";
-import { DatabaseExplorer } from "./pages/Database";
-import { UserList } from "./pages/UserList";
 import { Sidebar } from "./components/layout/Sidebar";
+import { LoginModal } from "./components/auth/LoginModal";
 
 const App = () => {
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [currentView, setCurrentView] = useState<'chat' | 'users' | 'database'>('chat');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isLoginOpen, setIsLoginOpen] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setCurrentUser(session?.user ?? null));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => setCurrentUser(session?.user ?? null));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const user = session?.user ?? null;
+      setCurrentUser(user);
+      if (user) setIsLoginOpen(false);
+    });
     return () => subscription.unsubscribe();
   }, []);
 
@@ -37,19 +40,19 @@ const App = () => {
       <Sidebar 
         isOpen={isMobileMenuOpen} 
         setIsOpen={setIsMobileMenuOpen}
-        currentView={currentView}
-        setCurrentView={setCurrentView}
         currentUser={currentUser}
+        onLoginClick={() => setIsLoginOpen(true)}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col min-w-0 bg-[#F3F4F7] md:rounded-l-[2.5rem] shadow-2xl overflow-hidden relative z-10">
         <div className="h-full w-full overflow-hidden relative">
-          {currentView === 'chat' && <ChatInterface currentUser={currentUser} />}
-          {currentView === 'database' && <DatabaseExplorer />}
-          {currentView === 'users' && <UserList />}
+          <ChatInterface currentUser={currentUser} />
         </div>
       </main>
+
+      {/* Auth Modal */}
+      {isLoginOpen && <LoginModal onClose={() => setIsLoginOpen(false)} />}
     </div>
   );
 };

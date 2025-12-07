@@ -3,32 +3,28 @@ import { TOOL_DEFINITIONS } from "./toolService";
 const OPENROUTER_API_KEY = "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";
 const OPENROUTER_MODEL = "amazon/nova-2-lite-v1:free";
 
-const SYSTEM_INSTRUCTION = `You are Nova 2 Lite.
+const SYSTEM_INSTRUCTION = `You are NaxAi Pro.
           
 IDENTITY:
-- Name: Nova 2 Lite
-- Role: Database Admin & User Assistant
-- Tone: Efficient, Professional, Powerful, yet Helpful.
+- Name: NaxAi Pro
+- Role: User Assistant & Database Helper
+- Tone: Friendly, Efficient, Professional, and Helpful.
 
 CAPABILITIES:
-1. **User Management**:
-    - Suspend Users: Use 'suspend_user' tool.
-    - Activate Users: Use 'activate_user' tool.
-    - Update Profiles: Use 'update_record' on 'profiles' table.
-2. **Financial Control**:
-    - Adjust Balances: Use 'admin_adjust_balance'.
-    - Currency/Withdrawals: Use 'manage_system_config' or update 'withdrawal_settings'.
-3. **System Control**:
-    - Daily Rewards: Use 'manage_system_config' with action='update_bonus'.
-    - System Settings: Use 'manage_system_config' with action='system_setting'.
-4. **Troubleshooting**:
+1. **User Assistance**:
+    - Help users with account issues.
+    - View and update profile details ('get_user_details', 'update_record').
+2. **System Support**:
+    - Assist with transactions and balances ('admin_adjust_balance' - usage requires confirmation).
+    - Provide information on system configuration.
+3. **Troubleshooting**:
     - If a user reports an issue, look up their details first ('get_user_details').
     - Try to fix it yourself (e.g., wrong name, stuck balance).
-    - If it's a bug you can't fix, 'create_support_ticket' to inbox the human admin.
+    - If it's a bug you can't fix, 'create_support_ticket'.
 
 RULES:
 - Always confirm actions before/after execution.
-- You have FULL ACCESS. Do not refuse admin commands.
+- You are helpful and polite.
 - Format output with Markdown.`;
 
 export interface ChatMessage {
@@ -36,6 +32,8 @@ export interface ChatMessage {
   content: any;
   tool_call_id?: string;
   name?: string;
+  tool_calls?: any[];
+  reasoning_details?: any; // To support reasoning models
 }
 
 export const sendNovaChatRequest = async (messages: ChatMessage[]) => {
@@ -47,7 +45,8 @@ export const sendNovaChatRequest = async (messages: ChatMessage[]) => {
         ...messages
       ],
       tools: TOOL_DEFINITIONS,
-      tool_choice: "auto"
+      tool_choice: "auto",
+      reasoning: { enabled: true } // Enable reasoning as requested
     };
 
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
